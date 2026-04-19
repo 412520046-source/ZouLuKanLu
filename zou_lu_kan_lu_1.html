@@ -1,0 +1,889 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8"/>
+  <title>鄒路看鹿</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no"/>
+  <style>
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+html,body{width:100%;height:100%;overflow:hidden;background:#0c1410;font-family:Georgia,"Times New Roman",serif;color:#f7f5e9}
+#game-root{position:relative;width:100%;height:100vh;max-height:100vh;display:flex;align-items:center;justify-content:center;background:radial-gradient(circle at top,#1c2b22 0,#050806 55%,#020302 100%)}
+#game-canvas{height:100vh;max-height:100vh;aspect-ratio:9/16;width:auto;display:block}
+#hud{position:absolute;top:12px;left:50%;transform:translateX(-50%);display:flex;gap:8px;z-index:5;pointer-events:none}
+.pill{min-width:96px;padding:6px 12px;border-radius:999px;border:1px solid #4e7a5a;background:rgba(5,10,7,0.85);color:#f4f1e4;text-align:center;font-size:14px;transition:border-color .25s,color .25s}
+.pill.warn{border-color:#c84030;color:#ffb0a0}
+.overlay{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;background:radial-gradient(circle at center,rgba(3,6,4,.75),rgba(1,2,1,.95));opacity:0;pointer-events:none;transition:opacity 200ms ease-out;z-index:10}
+.overlay.visible{opacity:1;pointer-events:auto}
+.overlay-panel{width:min(92vw,380px);max-height:90vh;overflow-y:auto;padding:18px 18px 20px;border-radius:18px;background:linear-gradient(145deg,#111a14,#1b2b20);border:1px solid #4b7d5b;box-shadow:0 16px 40px rgba(0,0,0,.65)}
+.overlay-panel h1{font-size:22px;margin-bottom:8px;letter-spacing:.03em}
+.rules{font-size:13px;line-height:1.5;margin:6px 0 12px}
+.rule-section+.rule-section{margin-top:8px}
+.rule-section h2{font-size:14px;margin-bottom:2px;color:#e4ddc0}
+.rule-section ul{list-style:none}
+.rule-section li{margin-bottom:2px}
+.tag{padding:1px 6px;border-radius:999px;border:1px solid;font-size:12px}
+.tag.good{border-color:#6cbf7a;color:#b6f2c3}
+.tag.bad{border-color:#c65b4b;color:#fbc2b7}
+.tag.plant{border-color:#f0c85e;color:#ffe9aa}
+.score.good{color:#9fe29d}
+.score.bad{color:#ff9b9b}
+.time{color:#ffe38a}
+.primary-btn{width:100%;padding:10px 14px;margin-top:2px;border-radius:999px;border:1px solid #4f815f;background:linear-gradient(145deg,#25432f,#345a3f);color:#f7f5ea;font-family:inherit;font-size:15px;letter-spacing:.05em;text-align:center;cursor:pointer;-webkit-tap-highlight-color:transparent}
+.primary-btn:active{background:linear-gradient(145deg,#1f3928,#2b4a36)}
+.result-title{margin-top:4px;margin-bottom:4px;font-size:16px}
+.result-score{font-size:14px;margin-bottom:8px}
+.floating-label{position:absolute;left:50%;top:16%;transform:translateX(-50%);padding:4px 10px;border-radius:999px;font-size:12px;border:1px solid #f0c85e;background:rgba(16,20,10,.9);color:#ffe9aa;opacity:0;pointer-events:none;transition:opacity 180ms ease-out,transform 180ms ease-out;z-index:6}
+.floating-label.visible{opacity:1;transform:translate(-50%,-6px)}
+  </style>
+</head>
+<body>
+<div id="game-root">
+  <div id="hud">
+    <div class="pill" id="pill-time">時間：<span id="time-label">30</span>s</div>
+    <div class="pill">分數：<span id="score-label">0</span></div>
+  </div>
+  <canvas id="game-canvas"></canvas>
+  <div id="overlay-start" class="overlay visible">
+    <div class="overlay-panel">
+      <h1>鄒路看鹿</h1>
+      <div class="rules">
+        <div class="rule-section">
+          <h2>狩獵目標</h2>
+          <ul>
+            <li><span class="tag good">山羌、公鹿</span>　點擊 <span class="score good">+5 分</span></li>
+            <li><span class="tag bad">帶仔母鹿、帶仔山豬</span>　誤傷 <span class="score bad">-15 分</span></li>
+          </ul>
+        </div>
+        <div class="rule-section">
+          <h2>山林植物</h2>
+          <ul>
+            <li><span class="tag plant">金草石斛、雀榕</span>　點擊 <span class="time">+3 秒</span></li>
+          </ul>
+        </div>
+        <div class="rule-section">
+          <h2>成為 suaemi 大勇士</h2>
+          <p>30 秒內累積 <strong>50 分</strong> 以上。</p>
+        </div>
+      </div>
+      <button id="btn-start" class="primary-btn">進入山林</button>
+    </div>
+  </div>
+  <div id="overlay-result" class="overlay">
+    <div class="overlay-panel">
+      <h1>狩獵結束</h1>
+      <p id="result-title" class="result-title"></p>
+      <p id="result-score" class="result-score"></p>
+      <button id="btn-restart" class="primary-btn">再走一趟山路</button>
+    </div>
+  </div>
+  <div id="floating-label" class="floating-label"></div>
+</div>
+
+<script>
+(function(){
+'use strict';
+
+// ── Canvas ──────────────────────────────────────────────────────────────────
+const canvas = document.getElementById('game-canvas');
+const ctx    = canvas.getContext('2d');
+const W = 360, H = 640;
+canvas.width = W; canvas.height = H;
+
+// roundRect polyfill for Safari < 15.4
+if (!CanvasRenderingContext2D.prototype.roundRect) {
+  CanvasRenderingContext2D.prototype.roundRect = function(x,y,w,h,r){
+    r = Math.min(r, w/2, h/2);
+    this.beginPath();
+    this.moveTo(x+r,y); this.lineTo(x+w-r,y);
+    this.quadraticCurveTo(x+w,y,x+w,y+r);
+    this.lineTo(x+w,y+h-r);
+    this.quadraticCurveTo(x+w,y+h,x+w-r,y+h);
+    this.lineTo(x+r,y+h);
+    this.quadraticCurveTo(x,y+h,x,y+h-r);
+    this.lineTo(x,y+r);
+    this.quadraticCurveTo(x,y,x+r,y);
+    this.closePath();
+    return this;
+  };
+}
+
+// ── DOM refs ─────────────────────────────────────────────────────────────────
+const hudTime  = document.getElementById('time-label');
+const hudScore = document.getElementById('score-label');
+const pillTime = document.getElementById('pill-time');
+const ovStart  = document.getElementById('overlay-start');
+const ovResult = document.getElementById('overlay-result');
+const resTitle = document.getElementById('result-title');
+const resScore = document.getElementById('result-score');
+const floatLbl = document.getElementById('floating-label');
+document.getElementById('btn-start').addEventListener('click', startGame);
+document.getElementById('btn-restart').addEventListener('click', startGame);
+
+// ── Types & Phases ────────────────────────────────────────────────────────
+const T = { MUNTJAC:'m', BUCK:'b', DOE:'d', BOAR:'p', ORCHID:'o', FIG:'f' };
+const PH = { NORMAL:0, MIGRATION:1, FINAL:2 };
+
+// Spawn interval [min,max] in seconds — migration/final are 25% faster
+const SPAWN_RANGE = {
+  [PH.NORMAL]:    [0.70, 1.10],
+  [PH.MIGRATION]: [0.525, 0.825],
+  [PH.FINAL]:     [0.525, 0.825],
+};
+
+// How long animals stay visible per phase
+const ANIMAL_DUR = {
+  [PH.NORMAL]:    [1.4, 2.0],
+  [PH.MIGRATION]: [1.05, 1.50],
+  [PH.FINAL]:     [1.05, 1.50],
+};
+
+// Plants: in migration/final they are eaten quickly
+const PLANT_DUR = {
+  [PH.NORMAL]:    [2.2, 3.0],
+  [PH.MIGRATION]: [0.45, 0.75],
+  [PH.FINAL]:     [0.45, 0.75],
+};
+
+const RUSTLE_DELAY  = 0.36;  // seconds between rustle and animal appearing
+const JUMP_SPEED    = 3.2;   // alpha units/s (0→1 in ~0.31s each way)
+const JUMP_ITV_MIN  = 1.3;
+const JUMP_ITV_MAX  = 2.4;
+
+// ── Utilities ─────────────────────────────────────────────────────────────
+const clamp = (v,lo,hi) => Math.max(lo, Math.min(hi, v));
+const rnd   = (lo,hi)   => lo + Math.random() * (hi - lo);
+
+function shade(hex, pct) {
+  const n = parseInt(hex.replace('#',''), 16);
+  const a = Math.round(2.55 * pct);
+  const r = clamp((n>>16)+a, 0, 255);
+  const g = clamp(((n>>8)&0xff)+a, 0, 255);
+  const b = clamp((n&0xff)+a, 0, 255);
+  return '#' + (0x1000000 + r*0x10000 + g*0x100 + b).toString(16).slice(1);
+}
+
+// ── Audio ─────────────────────────────────────────────────────────────────
+let ac = null;
+function initAudio() {
+  if (!ac) ac = new (window.AudioContext || window.webkitAudioContext)();
+}
+function _beep(type, f0, f1, dur, vol=0.17) {
+  if (!ac) return;
+  try {
+    const o = ac.createOscillator(), g = ac.createGain();
+    o.type = type;
+    o.frequency.setValueAtTime(f0, ac.currentTime);
+    o.frequency.exponentialRampToValueAtTime(f1, ac.currentTime + dur);
+    g.gain.setValueAtTime(0, ac.currentTime);
+    g.gain.linearRampToValueAtTime(vol, ac.currentTime + 0.025);
+    g.gain.exponentialRampToValueAtTime(0.001, ac.currentTime + dur);
+    o.connect(g).connect(ac.destination);
+    o.start(); o.stop(ac.currentTime + dur + 0.05);
+  } catch(e) {}
+}
+const playRustle  = () => _beep('triangle', 220, 1100, 0.28, 0.13);
+const playGoodHit = () => _beep('sine',     900, 350,  0.18, 0.20);
+const playBadHit  = () => _beep('sawtooth', 180, 70,   0.35, 0.20);
+const playPlant   = () => _beep('square',   660, 990,  0.17, 0.15);
+
+// ── Bush layout constants ─────────────────────────────────────────────────
+const ROWS       = 3;
+const COLS       = 4;
+const BUSH_ROW_Y = [H * 0.75, H * 0.66, H * 0.58];
+const TOTAL_W    = W * 0.90;
+const START_X    = (W - TOTAL_W) / 2;
+const BUSH_W     = TOTAL_W / COLS * 0.90;
+const BUSH_H     = H * 0.12;
+const COL_STEP   = TOTAL_W / COLS;
+
+// Each row has two gradient stops [top-colour, bottom-colour]
+const BUSH_COLS = [
+  ['#1a3a24','#24482c'],   // row 0 – front, richest
+  ['#163020','#1e3c28'],   // row 1 – mid
+  ['#102416','#192e1e'],   // row 2 – back, darkest
+];
+
+// ── Bush class ─────────────────────────────────────────────────────────────
+class Bush {
+  constructor(row, col) {
+    this.row = row; this.col = col;
+    this.x   = START_X + col * COL_STEP;
+    this.y   = BUSH_ROW_Y[row];
+    this.w   = BUSH_W;
+    this.h   = BUSH_H;
+    this.occupant = null;  // null | PendingSpawn | Entity
+    this.rustleT  = 0;
+  }
+  get isFree() { return this.occupant === null; }
+  rustle()     { this.rustleT = 0.42; }
+  update(dt)   { if (this.rustleT > 0) this.rustleT = Math.max(0, this.rustleT - dt); }
+
+  draw() {
+    const sway = this.rustleT > 0 ? Math.sin(this.rustleT * 38) * 5 : 0;
+    const [c1, c2] = BUSH_COLS[this.row];
+    const g = ctx.createLinearGradient(this.x, this.y - this.h, this.x, this.y);
+    g.addColorStop(0, c1);
+    g.addColorStop(1, c2);
+
+    ctx.save();
+    ctx.translate(sway, 0);
+    ctx.beginPath();
+    const r = this.h / 2;
+    ctx.moveTo(this.x,           this.y);
+    ctx.lineTo(this.x,           this.y - r);
+    ctx.quadraticCurveTo(this.x + this.w/2, this.y - this.h, this.x + this.w, this.y - r);
+    ctx.lineTo(this.x + this.w,  this.y);
+    ctx.closePath();
+    ctx.fillStyle = g;
+    ctx.fill();
+
+    // Rustle glow edge
+    if (this.rustleT > 0.08) {
+      ctx.globalAlpha = Math.min(this.rustleT * 1.6, 1) * 0.28;
+      ctx.strokeStyle = '#62e872';
+      ctx.lineWidth   = 1.8;
+      ctx.stroke();
+    }
+    ctx.restore();
+  }
+}
+
+// Flat array of all bushes; rebuilt on each game start
+let allBushes = [];
+function initBushes() {
+  allBushes = [];
+  for (let r = 0; r < ROWS; r++)
+    for (let c = 0; c < COLS; c++)
+      allBushes.push(new Bush(r, c));
+}
+function getFreeBushes() { return allBushes.filter(b => b.isFree); }
+
+// ── PendingSpawn ───────────────────────────────────────────────────────────
+// Represents a reserved bush that has rustled but the entity hasn't appeared yet.
+// It occupies the bush so nothing else can spawn there during the rustle phase.
+class PendingSpawn {
+  constructor(bush, type) {
+    this.bush  = bush;
+    this.type  = type;
+    this.timer = RUSTLE_DELAY;
+    bush.occupant = this;
+  }
+  // Returns true when the delay has elapsed and an Entity should be created
+  tick(dt) { this.timer -= dt; return this.timer <= 0; }
+}
+
+// ── Entity ─────────────────────────────────────────────────────────────────
+const ENT_W = (W / COLS) * 0.70;
+const ENT_H = H * 0.165;
+
+class Entity {
+  constructor(bush, type, duration) {
+    this.type     = type;
+    this.duration = duration;
+    this.age      = 0;
+    this.alive    = true;
+    this.isHit    = false;
+    this.w = ENT_W; this.h = ENT_H;
+
+    // Bind to bush
+    this.bush  = bush;
+    this.x     = bush.x + (bush.w - ENT_W) / 2;
+    this.baseY = bush.y;
+    this.row   = bush.row;
+    bush.occupant = this;   // take over occupancy from PendingSpawn
+
+    // Jump state (active in FINAL phase)
+    this.jState    = 'idle'; // 'idle' | 'fadeOut' | 'fadeIn'
+    this.jAlpha    = 1;
+    this.jToBush   = null;
+    this.jumpTimer = rnd(JUMP_ITV_MIN, JUMP_ITV_MAX);
+  }
+
+  // Pop-up progress 0→1 during first 0.22 s
+  get popAlpha()   { return clamp(this.age / 0.22, 0, 1); }
+  get popOffsetY() { return (1 - this.popAlpha) * 22; }
+
+  // Visual alpha combines pop-up progress with jump fade
+  get drawAlpha() {
+    if (this.jState !== 'idle') return this.jAlpha;
+    return this.popAlpha;
+  }
+
+  // Only register clicks when fully popped up and not mid-jump
+  get clickable() {
+    return this.alive && !this.isHit && this.jState === 'idle' && this.popAlpha > 0.45;
+  }
+
+  update(dt) {
+    if (!this.alive) return;
+
+    // ── Jump animation ─────────────────────────────────────────────────
+    if (this.jState === 'fadeOut') {
+      this.jAlpha = Math.max(0, this.jAlpha - dt * JUMP_SPEED);
+      if (this.jAlpha <= 0) {
+        // Release source bush, take destination
+        if (this.bush.occupant === this) this.bush.occupant = null;
+        this.bush  = this.jToBush;
+        this.x     = this.bush.x + (this.bush.w - this.w) / 2;
+        this.baseY = this.bush.y;
+        this.row   = this.bush.row;
+        this.bush.occupant = this;
+        this.bush.rustle();
+        playRustle();
+        this.jToBush  = null;
+        this.jState   = 'fadeIn';
+        this.jAlpha   = 0;
+      }
+      return; // don't age while transitioning
+    }
+    if (this.jState === 'fadeIn') {
+      this.jAlpha = Math.min(1, this.jAlpha + dt * JUMP_SPEED);
+      if (this.jAlpha >= 1) {
+        this.jState    = 'idle';
+        this.jAlpha    = 1;
+        this.jumpTimer = rnd(JUMP_ITV_MIN, JUMP_ITV_MAX);
+      }
+      return;
+    }
+
+    // ── Normal aging ────────────────────────────────────────────────────
+    this.age += dt;
+
+    // Trigger jump in FINAL phase
+    if (gs && gs.phase === PH.FINAL) {
+      this.jumpTimer -= dt;
+      if (this.jumpTimer <= 0) this._tryJump();
+    }
+
+    // Expire
+    if (this.age >= this.duration) {
+      const isPlant = this.type === T.ORCHID || this.type === T.FIG;
+      this._die(isPlant && gs && gs.phase !== PH.NORMAL);
+    }
+  }
+
+  _tryJump() {
+    // Prefer a different row; fall back to any free bush
+    const free    = getFreeBushes().filter(b => b !== this.bush);
+    if (!free.length) { this.jumpTimer = 0.6; return; }
+    const diffRow = free.filter(b => b.row !== this.row);
+    const pool    = diffRow.length ? diffRow : free;
+    const tgt     = pool[Math.floor(Math.random() * pool.length)];
+    tgt.occupant  = this;   // reserve destination immediately
+    this.jToBush  = tgt;
+    this.jState   = 'fadeOut';
+    this.jAlpha   = 1;
+  }
+
+  _die(eaten = false) {
+    if (!this.alive) return;
+    this.alive = false;
+    if (this.bush   && this.bush.occupant   === this) this.bush.occupant   = null;
+    if (this.jToBush && this.jToBush.occupant === this) this.jToBush.occupant = null;
+    if (eaten) spawnFloat('🌿 啃食', this.x + this.w/2, this.baseY - this.h*0.6, '#a8d86a');
+  }
+
+  tryHit(px, py) {
+    if (!this.clickable) return false;
+    const off = this.popOffsetY;
+    if (px >= this.x && px <= this.x + this.w &&
+        py >= this.baseY - this.h - off && py <= this.baseY - off) {
+      this.isHit = true;
+      this._die(false);
+      return true;
+    }
+    return false;
+  }
+
+  draw() {
+    if (!this.alive) return;
+    const alpha = this.drawAlpha;
+    if (alpha <= 0.01) return;
+    ctx.save();
+    ctx.globalAlpha = alpha;
+    _drawEntity(this.type, this.x, this.baseY - this.popOffsetY, this.w, this.h);
+    ctx.restore();
+  }
+}
+
+// ── Entity drawing dispatch ────────────────────────────────────────────────
+function _drawEntity(type, x, bY, w, h) {
+  switch (type) {
+    case T.MUNTJAC: drawDeer(x, bY, w, h, '#d6b27a', '山羌',     false, false); break;
+    case T.BUCK:    drawDeer(x, bY, w, h, '#c4905a', '公鹿',     true,  false); break;
+    case T.DOE:     drawDeer(x, bY, w, h, '#aa7b5c', '帶仔母鹿', false, true);  break;
+    case T.BOAR:    drawBoar(x, bY, w, h, '帶仔山豬'); break;
+    case T.ORCHID:  drawOrchid(x, bY, w, h); break;
+    case T.FIG:     drawFig(x, bY, w, h);    break;
+  }
+}
+
+// ── Drawing: Deer ─────────────────────────────────────────────────────────
+function drawDeer(x, bottomY, w, h, color, label, antlers=false, hasYoung=false) {
+  ctx.save();
+  const bh = h*0.5, bw = w*0.7, bx = x+(w-bw)/2, by = bottomY-bh;
+  const bg = ctx.createLinearGradient(bx, by-bh, bx, bottomY);
+  bg.addColorStop(0, shade(color,-15)); bg.addColorStop(1, shade(color,5));
+  ctx.fillStyle = bg;
+  ctx.beginPath(); ctx.roundRect(bx, by, bw, bh, 6); ctx.fill();
+
+  const hw = bw*0.35, hh = bh*0.7, hx = bx+bw-hw+2, hy = by-hh*0.3;
+  ctx.beginPath(); ctx.roundRect(hx, hy, hw, hh, 6); ctx.fill();
+
+  ctx.fillStyle = shade(color,-20);
+  ctx.beginPath();
+  ctx.ellipse(hx+hw*0.2, hy+hh*0.1,  4, 7, 0, 0, Math.PI*2);
+  ctx.ellipse(hx+hw*0.8, hy+hh*0.12, 4, 7, 0, 0, Math.PI*2);
+  ctx.fill();
+
+  ctx.fillStyle = '#111';
+  ctx.beginPath(); ctx.arc(hx+hw*0.7, hy+hh*0.35, 2, 0, Math.PI*2); ctx.fill();
+
+  ctx.strokeStyle = shade(color,-30); ctx.lineWidth = 3;
+  for (let i=0; i<3; i++) {
+    const lx = bx + bw*(0.2+0.3*(i/2));
+    ctx.beginPath(); ctx.moveTo(lx, bottomY-bh*0.9); ctx.lineTo(lx, bottomY); ctx.stroke();
+  }
+
+  if (antlers) {
+    ctx.strokeStyle = '#c6b493'; ctx.lineWidth = 2;
+    const ax = hx+hw*0.4, ay = hy+hh*0.1;
+    ctx.beginPath();
+    ctx.moveTo(ax,ay); ctx.lineTo(ax-8,ay-16);
+    ctx.moveTo(ax,ay); ctx.lineTo(ax+8,ay-18);
+    ctx.stroke();
+  }
+
+  if (hasYoung) {
+    ctx.fillStyle = shade(color,-10);
+    ctx.beginPath();
+    ctx.roundRect(bx-bw*0.3, bottomY-bh*0.45, bw*0.4, bh*0.45, 5);
+    ctx.fill();
+  }
+
+  ctx.fillStyle = 'rgba(4,8,3,0.8)';
+  ctx.font = '10px Georgia'; ctx.textAlign = 'center';
+  ctx.fillText(label, x+w/2, bottomY-h-4);
+  ctx.restore();
+}
+
+// ── Drawing: Boar ─────────────────────────────────────────────────────────
+function drawBoar(x, bottomY, w, h, label) {
+  ctx.save();
+  const bh = h*0.55, bw = w*0.8, bx = x+(w-bw)/2, by = bottomY-bh;
+  const bg = ctx.createLinearGradient(bx, by-bh, bx, bottomY);
+  bg.addColorStop(0,'#332824'); bg.addColorStop(1,'#1e1512');
+  ctx.fillStyle = bg;
+  ctx.beginPath(); ctx.roundRect(bx, by, bw, bh, 6); ctx.fill();
+
+  const hw = bw*0.45, hh = bh*0.8, hx = bx-hw*0.1, hy = by-hh*0.1;
+  ctx.beginPath(); ctx.roundRect(hx, hy, hw, hh, 6); ctx.fill();
+
+  ctx.fillStyle = '#000';
+  ctx.beginPath(); ctx.arc(hx+hw*0.65, hy+hh*0.4, 2, 0, Math.PI*2); ctx.fill();
+
+  const sw = hw*0.45, sh = hh*0.35, sx = hx-sw*0.05, sy = hy+hh*0.35;
+  ctx.fillStyle = '#5b4742';
+  ctx.beginPath(); ctx.roundRect(sx, sy, sw, sh, 4); ctx.fill();
+
+  ctx.fillStyle = '#1a1210';
+  ctx.beginPath();
+  ctx.arc(sx+sw*0.3, sy+sh*0.6, 2, 0, Math.PI*2);
+  ctx.arc(sx+sw*0.7, sy+sh*0.6, 2, 0, Math.PI*2);
+  ctx.fill();
+
+  ctx.fillStyle = '#f1e4cf';
+  ctx.beginPath(); ctx.moveTo(sx+sw*0.2,sy+sh*0.8); ctx.lineTo(sx+sw*0.1,sy+sh*0.6); ctx.lineTo(sx+sw*0.3,sy+sh*0.7); ctx.closePath(); ctx.fill();
+  ctx.beginPath(); ctx.moveTo(sx+sw*0.8,sy+sh*0.8); ctx.lineTo(sx+sw*0.7,sy+sh*0.6); ctx.lineTo(sx+sw*0.9,sy+sh*0.7); ctx.closePath(); ctx.fill();
+
+  ctx.strokeStyle = '#201713'; ctx.lineWidth = 3;
+  for (let i=0; i<3; i++) {
+    const lx = bx+bw*(0.2+0.3*(i/2));
+    ctx.beginPath(); ctx.moveTo(lx, bottomY-bh*0.8); ctx.lineTo(lx, bottomY); ctx.stroke();
+  }
+
+  const pigW = bw*0.4, pigH = bh*0.4, px = bx+bw*0.5, py = bottomY-pigH;
+  ctx.fillStyle = '#5c4139';
+  ctx.beginPath(); ctx.roundRect(px, py, pigW, pigH, 4); ctx.fill();
+
+  ctx.strokeStyle = '#b79474'; ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(px+pigW*0.15, py+pigH*0.25); ctx.lineTo(px+pigW*0.8,  py+pigH*0.25);
+  ctx.moveTo(px+pigW*0.2,  py+pigH*0.45); ctx.lineTo(px+pigW*0.85, py+pigH*0.45);
+  ctx.stroke();
+
+  ctx.fillStyle = 'rgba(4,8,3,0.8)';
+  ctx.font = '10px Georgia'; ctx.textAlign = 'center';
+  ctx.fillText(label, x+w/2, bottomY-h-4);
+  ctx.restore();
+}
+
+// ── Drawing: Orchid ──────────────────────────────────────────────────────
+function drawOrchid(x, bottomY, w, h) {
+  ctx.save();
+  const cx = x + w/2;
+  ctx.strokeStyle = '#3b6b2e'; ctx.lineWidth = 3;
+  ctx.beginPath(); ctx.moveTo(cx, bottomY); ctx.lineTo(cx, bottomY-h*0.6); ctx.stroke();
+  ctx.fillStyle = '#3f7b36';
+  for (let i=0; i<3; i++) {
+    ctx.beginPath();
+    ctx.ellipse(cx-12, bottomY-8-i*6, 9, 4, -0.7, 0, Math.PI*2);
+    ctx.ellipse(cx+12, bottomY-10-i*6, 9, 4,  0.7, 0, Math.PI*2);
+    ctx.fill();
+  }
+  ctx.fillStyle = '#f4d868';
+  for (let i=0; i<4; i++) {
+    ctx.beginPath();
+    ctx.arc(cx+(i-1.5)*6, bottomY-h*0.65+(i%2)*4, 4, 0, Math.PI*2);
+    ctx.fill();
+  }
+  ctx.restore();
+}
+
+// ── Drawing: Fig ─────────────────────────────────────────────────────────
+function drawFig(x, bottomY, w, h) {
+  ctx.save();
+  const cx = x+w/2, cy = bottomY-h*0.7;
+  ctx.strokeStyle = '#5b432b'; ctx.lineWidth = 4;
+  ctx.beginPath(); ctx.moveTo(cx-18, cy-8); ctx.lineTo(cx+18, cy+8); ctx.stroke();
+  ctx.fillStyle = '#284c2f';
+  ctx.beginPath();
+  ctx.ellipse(cx-14, cy-6, 16, 10, -0.8, 0, Math.PI*2);
+  ctx.ellipse(cx+14, cy+6, 16, 10,  0.8, 0, Math.PI*2);
+  ctx.fill();
+  const fc = ['#b1362b','#da4b3a','#8b241c'];
+  for (let i=0; i<4; i++) {
+    ctx.fillStyle = fc[i%3];
+    ctx.beginPath(); ctx.arc(cx+(i-1.5)*8, cy+(i%2)*6, 5, 0, Math.PI*2); ctx.fill();
+  }
+  ctx.restore();
+}
+
+// ── Background ───────────────────────────────────────────────────────────
+function drawBackground() {
+  const skyG = ctx.createLinearGradient(0,0,0,H*0.5);
+  skyG.addColorStop(0,'#202c2b'); skyG.addColorStop(1,'#0b1511');
+  ctx.fillStyle = skyG; ctx.fillRect(0,0,W,H);
+
+  ctx.fillStyle = '#111918';
+  ctx.beginPath();
+  ctx.moveTo(0,H*0.45); ctx.lineTo(W*0.25,H*0.35); ctx.lineTo(W*0.55,H*0.47);
+  ctx.lineTo(W*0.85,H*0.33); ctx.lineTo(W,H*0.42);
+  ctx.lineTo(W,H); ctx.lineTo(0,H);
+  ctx.closePath(); ctx.fill();
+
+  ctx.fillStyle = '#121c17'; ctx.fillRect(0, H*0.35, W, H*0.2);
+
+  ctx.strokeStyle = '#2a3127'; ctx.lineWidth = 10;
+  for (let i=0; i<3; i++) {
+    const tx = (i+0.5) * (W/3);
+    ctx.beginPath(); ctx.moveTo(tx, H*0.38); ctx.lineTo(tx-6, H*0.22); ctx.stroke();
+  }
+
+  ctx.fillStyle = '#2a3c2d';
+  ctx.beginPath();
+  ctx.ellipse(W*0.25, H*0.25, 80, 50, 0, 0, Math.PI*2);
+  ctx.ellipse(W*0.5,  H*0.22, 90, 60, 0, 0, Math.PI*2);
+  ctx.ellipse(W*0.75, H*0.26, 85, 55, 0, 0, Math.PI*2);
+  ctx.fill();
+
+  ctx.fillStyle = '#050905'; ctx.fillRect(0, H*0.55, W, H*0.45);
+  ctx.fillStyle = '#0b150d'; ctx.fillRect(0, H*0.58, W, H*0.42);
+}
+
+// ── Migration overlay text ─────────────────────────────────────────────
+function drawMigrationText(alpha) {
+  if (alpha <= 0) return;
+  ctx.save();
+  ctx.globalAlpha = alpha;
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  ctx.shadowColor = '#c8900a'; ctx.shadowBlur = 60;
+  ctx.font = 'bold 64px Georgia';
+  ctx.fillStyle = '#f0c858';
+  ctx.fillText('大遷徙', W/2, H/2 - 18);
+  ctx.shadowBlur = 0;
+  ctx.font = '15px Georgia';
+  ctx.fillStyle = 'rgba(245,225,150,0.90)';
+  ctx.fillText('動物大遷徙開始了！', W/2, H/2 + 34);
+  ctx.restore();
+}
+
+// ── Float messages (+5 / -15 / +3s / 🌿 啃食) ────────────────────────
+let floatMsgs = [];
+function spawnFloat(text, x, y, color, dur=0.9) {
+  floatMsgs.push({ text, x, y, color, age:0, dur });
+}
+function tickFloats(dt) {
+  floatMsgs = floatMsgs.filter(f => { f.age += dt; return f.age < f.dur; });
+}
+function drawFloats() {
+  for (const f of floatMsgs) {
+    const p = f.age / f.dur;
+    ctx.save();
+    ctx.globalAlpha = p < 0.72 ? 1 : 1 - (p - 0.72) / 0.28;
+    ctx.textAlign = 'center'; ctx.font = 'bold 13px Georgia';
+    ctx.fillStyle = f.color;
+    ctx.fillText(f.text, f.x, f.y - f.age * 28);
+    ctx.restore();
+  }
+}
+
+// ── Click FX ─────────────────────────────────────────────────────────────
+let clickFX = [];
+function addClickFX(x, y) { clickFX.push({ x, y, age:0, dur:0.38 }); }
+function tickClickFX(dt) {
+  clickFX = clickFX.filter(c => { c.age += dt; return c.age < c.dur; });
+}
+function drawClickFX() {
+  for (const c of clickFX) {
+    const p = c.age / c.dur;
+    ctx.save();
+    ctx.globalAlpha = 1 - p;
+    ctx.strokeStyle = '#ff4444'; ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.arc(c.x, c.y, 14*(1+p*0.3), 0, Math.PI*2); ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(c.x-20, c.y); ctx.lineTo(c.x+20, c.y);
+    ctx.moveTo(c.x, c.y-20); ctx.lineTo(c.x, c.y+20);
+    ctx.stroke();
+    ctx.restore();
+  }
+}
+
+// ── Spawn logic ───────────────────────────────────────────────────────────
+function rollType(phase) {
+  const r = Math.random();
+  if (phase === PH.NORMAL) {
+    // 50% positive animals, 30% taboo, 20% plants
+    if (r < 0.50) return Math.random() < 0.5 ? T.MUNTJAC : T.BUCK;
+    if (r < 0.80) return Math.random() < 0.5 ? T.DOE     : T.BOAR;
+    return Math.random() < 0.5 ? T.ORCHID : T.FIG;
+  }
+  // MIGRATION / FINAL: 53% taboo, 22% positive, 25% plants
+  if (r < 0.22) return Math.random() < 0.5 ? T.MUNTJAC : T.BUCK;
+  if (r < 0.75) return Math.random() < 0.5 ? T.DOE     : T.BOAR;
+  return Math.random() < 0.5 ? T.ORCHID : T.FIG;
+}
+
+function getEntityDuration(type, phase) {
+  const isPlant = (type === T.ORCHID || type === T.FIG);
+  const table   = isPlant ? PLANT_DUR : ANIMAL_DUR;
+  const [lo, hi] = table[phase];
+  return rnd(lo, hi);
+}
+
+function scheduleSpawn() {
+  const free = getFreeBushes();
+  if (!free.length) return;
+  const bush = free[Math.floor(Math.random() * free.length)];
+  const type = rollType(gs.phase);
+  pending.push(new PendingSpawn(bush, type));
+  bush.rustle();
+  playRustle();
+}
+
+// ── Game state object (reset each game) ──────────────────────────────────
+let gs       = null;
+let pending  = [];
+let entities = [];
+
+// ── Main loop ─────────────────────────────────────────────────────────────
+function loop(ts) {
+  if (!gs || gs.mode !== 'playing') return;
+  const dt = Math.min((ts - gs.lastTs) / 1000, 0.05);
+  gs.lastTs = ts;
+
+  // Timer
+  gs.timeLeft -= dt;
+  if (gs.timeLeft <= 0) {
+    gs.timeLeft = 0;
+    hudTime.textContent = '0';
+    render();
+    endGame();
+    return;
+  }
+  hudTime.textContent      = Math.ceil(gs.timeLeft);
+  pillTime.className       = 'pill' + (gs.timeLeft <= 8 ? ' warn' : '');
+
+  // ── Phase transitions ─────────────────────────────────────────────────
+  if (!gs.migTriggered && gs.timeLeft <= 15) {
+    gs.migTriggered = true;
+    gs.phase        = PH.MIGRATION;
+    gs.migState     = 'in';
+    gs.migAge       = 0;
+    gs.migAlpha     = 0;
+  }
+  if (!gs.finalTriggered && gs.timeLeft <= 8) {
+    gs.finalTriggered = true;
+    gs.phase          = PH.FINAL;
+  }
+
+  // ── 大遷徙 text animation (fade-in 0.5s, hold 2s, fade-out 0.5s = 3s) ──
+  if (gs.migState !== 'done') {
+    gs.migAge += dt;
+    const FI=0.5, HOLD=2.0, FO=0.5;
+    if      (gs.migState === 'in')   { gs.migAlpha = Math.min(gs.migAge/FI, 1);        if (gs.migAge >= FI)   { gs.migState='hold'; gs.migAge=0; } }
+    else if (gs.migState === 'hold') { gs.migAlpha = 1;                                if (gs.migAge >= HOLD) { gs.migState='out';  gs.migAge=0; } }
+    else if (gs.migState === 'out')  { gs.migAlpha = Math.max(1-gs.migAge/FO, 0);      if (gs.migAge >= FO)   { gs.migState='done'; gs.migAlpha=0; } }
+  }
+
+  // ── Resolve pending spawns ────────────────────────────────────────────
+  pending = pending.filter(ps => {
+    if (ps.tick(dt)) {
+      // Entity constructor takes over bush.occupant from PendingSpawn
+      entities.push(new Entity(ps.bush, ps.type, getEntityDuration(ps.type, gs.phase)));
+      return false;
+    }
+    return true;
+  });
+
+  // ── Update entities ───────────────────────────────────────────────────
+  for (const e of entities) e.update(dt);
+  entities = entities.filter(e => e.alive);
+
+  // ── Update bushes ─────────────────────────────────────────────────────
+  for (const b of allBushes) b.update(dt);
+
+  // ── Spawn timer ───────────────────────────────────────────────────────
+  gs.spawnT -= dt;
+  if (gs.spawnT <= 0) {
+    scheduleSpawn();
+    const [lo, hi] = SPAWN_RANGE[gs.phase];
+    gs.spawnT = rnd(lo, hi);
+  }
+
+  // ── FX ────────────────────────────────────────────────────────────────
+  tickFloats(dt);
+  tickClickFX(dt);
+
+  render();
+  requestAnimationFrame(loop);
+}
+
+// ── Render ────────────────────────────────────────────────────────────────
+function render() {
+  ctx.clearRect(0, 0, W, H);
+  drawBackground();
+
+  // Draw rows back → front (row 2 → row 0), bushes then idle entities per row
+  for (let r = ROWS - 1; r >= 0; r--) {
+    for (const b of allBushes) if (b.row === r) b.draw();
+    for (const e of entities)  if (e.alive && e.row === r && e.jState === 'idle') e.draw();
+  }
+  // Jumping entities render above everything (they are semi-transparent mid-fade)
+  for (const e of entities) if (e.alive && e.jState !== 'idle') e.draw();
+
+  drawClickFX();
+  drawFloats();
+  if (gs && gs.migAlpha > 0) drawMigrationText(gs.migAlpha);
+}
+
+// ── Input ─────────────────────────────────────────────────────────────────
+let lblTimeout = null;
+function showLabel(text) {
+  floatLbl.textContent = text;
+  floatLbl.classList.add('visible');
+  if (lblTimeout) clearTimeout(lblTimeout);
+  lblTimeout = setTimeout(() => floatLbl.classList.remove('visible'), 1000);
+}
+
+function handlePointer(evt) {
+  if (!gs || gs.mode !== 'playing') return;
+  initAudio();
+  evt.preventDefault();
+  const rect = canvas.getBoundingClientRect();
+  const src  = evt.touches ? evt.touches[0] : evt;
+  const px   = (src.clientX - rect.left) * (W / rect.width);
+  const py   = (src.clientY - rect.top)  * (H / rect.height);
+
+  addClickFX(px, py);
+
+  // Hit detection: sweep front-to-back (row 0 first)
+  let hit = null;
+  outer: for (let r = 0; r < ROWS; r++) {
+    for (const e of entities) {
+      if (e.row === r && e.tryHit(px, py)) { hit = e; break outer; }
+    }
+  }
+  if (!hit) return;
+
+  switch (hit.type) {
+    case T.MUNTJAC:
+    case T.BUCK:
+      gs.score += 5;
+      playGoodHit();
+      spawnFloat('+5', px, py, '#9fe29d');
+      break;
+    case T.DOE:
+    case T.BOAR:
+      gs.score -= 15;
+      playBadHit();
+      spawnFloat('-15', px, py, '#ff9b9b');
+      break;
+    case T.ORCHID:
+      gs.timeLeft += 3;
+      playPlant();
+      showLabel('金草石斛 +3s');
+      spawnFloat('+3s', px, py, '#ffe38a');
+      break;
+    case T.FIG:
+      gs.timeLeft += 3;
+      playPlant();
+      showLabel('雀榕 +3s');
+      spawnFloat('+3s', px, py, '#ffe38a');
+      break;
+  }
+  hudScore.textContent = gs.score;
+}
+
+canvas.addEventListener('click',      handlePointer);
+canvas.addEventListener('touchstart', handlePointer, { passive: false });
+
+// ── Game control ──────────────────────────────────────────────────────────
+function startGame() {
+  initBushes();
+  pending   = [];
+  entities  = [];
+  floatMsgs = [];
+  clickFX   = [];
+
+  gs = {
+    mode:           'playing',
+    phase:          PH.NORMAL,
+    score:          0,
+    timeLeft:       30,
+    spawnT:         0.4,           // first spawn soon after start
+    lastTs:         performance.now(),
+    migTriggered:   false,
+    finalTriggered: false,
+    migState:       'done',        // 'in'|'hold'|'out'|'done'
+    migAge:         0,
+    migAlpha:       0,
+  };
+
+  hudScore.textContent = '0';
+  hudTime.textContent  = '30';
+  pillTime.className   = 'pill';
+  floatLbl.classList.remove('visible');
+  ovStart.classList.remove('visible');
+  ovResult.classList.remove('visible');
+
+  requestAnimationFrame(loop);
+}
+
+function endGame() {
+  gs.mode = 'ended';
+  resTitle.textContent = gs.score >= 50
+    ? '你是 suaemi 大勇士！'
+    : '還差一點，再回山裡磨練吧。';
+  resScore.textContent = `最終分數：${gs.score} 分`;
+  ovResult.classList.add('visible');
+}
+
+// ── Initialise static scene ───────────────────────────────────────────────
+initBushes();
+render();
+
+})();
+</script>
+</body>
+</html>
